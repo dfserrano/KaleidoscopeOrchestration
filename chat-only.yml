@@ -1,0 +1,170 @@
+heat_template_version: 2014-10-16
+
+description: Template to deploy a single chat (ejabberd) server
+
+parameters:
+  image:
+    type: string
+    label: Image name or ID
+    description: Image to be used for compute instance
+    default: Ubuntu-14-04-64
+  flavor:
+    type: string
+    label: Flavor
+    description: Type of instance (flavor) to be used
+    default: m1.small
+    constraints:
+      - allowed_values: [m1.tiny, m1.small, m1.medium, m1.large, m1.xlarge]
+        description: instance_type must be a valid instance type
+  key:
+    type: string
+    label: Key name
+    description: Name of key-pair to be used for compute instance
+    default: serranos
+  db_root_password:
+    type: string
+    label: Root password for MySQL
+    description: Root password for MySQL
+    default: admin
+    hidden: true
+    constraints:
+      - length: { min: 1, max: 41 }
+        description: db_root_password must be between 1 and 41 characters
+      - allowed_pattern: '[a-zA-Z0-9]*'
+        description: db_root_password must contain only alphanumeric characters
+  domain:
+    type: string
+    label: Domain name for XMPP
+    description: Domain name for XMPP
+    default: 142.150.208.206
+    constraints:
+      - length: { min: 5, max: 50 }
+        description: domain must be between 1 and 41 characters      
+
+
+resources:
+  chat_sec_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: chat_server_sec
+      description: Security group that allows Ping, SSH, and RTSP
+      rules:
+      - protocol: icmp
+      - protocol: tcp
+        port_range_min: 22
+        port_range_max: 22
+      - protocol: tcp
+        port_range_min: 5222
+        port_range_max: 5222
+      - protocol: tcp
+        port_range_min: 5269
+        port_range_max: 5269
+      - protocol: tcp
+        port_range_min: 5280
+        port_range_max: 5280
+
+  chat_server:
+    type: OS::Nova::Server
+    properties:
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key }
+      security_groups:
+        - {get_resource: chat_sec_group}
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          params:
+            __database_root_password__: { get_param: db_root_password }
+            __domain__: { get_param: domain }
+          template: |
+            #!/bin/bash -ex
+            export DOMAIN="__domain__";
+            export LOCAL_IP=$(ifconfig eth0 | grep 'inet addr' | cut -d: -f2 | awk '{print $1}');
+
+            echo "Update packages lists...";
+            sudo apt-get update;
+
+            echo "Installing MySQL for XMPP server...";
+            #export DEBIAN_FRONTEND=noninteractive;
+            sudo DEBIAN_FRONTEND=noninteractive apt-get -y install mysql-server-5.6
+
+            # configure MySQL root password
+            mysqladmin -u root password "__database_root_password__"
+
+            # Comment-out bind-address in /etc/mysql/my.cnf to allow remote connections
+            sudo sed -i 's@bind-address@# bind-address@' /etc/mysql/my.cnf;
+
+            # restart db
+            sudo service mysql restart
+            echo "Finished installation of MySQL";
+
+            echo "Initializing database...";
+            mysql -u root --password="__database_root_password__" <<EOF
+            CREATE USER 'ejabberd'@'localhost' IDENTIFIED BY 'ejabberd';
+            GRANT ALL PRIVILEGES ON *.* TO 'ejabberd'@'localhost' WITH GRANT OPTION;
+            CREATE USER 'ejabberd'@'%' IDENTIFIED BY 'ejabberd';
+            GRANT ALL PRIVILEGES ON *.* TO 'ejabberd'@'%' WITH GRANT OPTION;
+            CREATE DATABASE ejabberd;
+            EOF
+
+            # Load database for XMPP server
+            wget https://raw.githubusercontent.com/dfserrano/KaleidoscopeOrchestration/master/chat/mysql.sql;
+            mysql -u ejabberd --password=ejabberd ejabberd < mysql.sql;
+            echo "Database ready";
+
+            echo "Installing ejabberd package...";
+            cd /home/ubuntu
+            sudo -u ubuntu wget https://www.process-one.net/downloads/downloads-action.php?file=/ejabberd/15.06/ejabberd_15.06-0_amd64.deb;
+            sudo -u ubuntu mv downloads-action.php?file=%2Fejabberd%2F15.06%2Fejabberd_15.06-0_amd64.deb ejabberd_15.06-0_amd64.deb;
+            sudo -u ubuntu sudo dpkg -i ejabberd_15.06-0_amd64.deb;
+            echo "ejabberd package installed";
+
+            echo "Configuring ejabberd...";
+            # Change configuration file ejabberd.yml
+            sudo sed -i "/^hosts:/{n;s/.*/  - \"$DOMAIN\"/}" /opt/ejabberd-15.06/conf/ejabberd.yml;
+            sudo sed -i "s@- \"admin\":.*@- \"admin\": \"$DOMAIN\"@" /opt/ejabberd-15.06/conf/ejabberd.yml;
+            sudo sed -i 's@auth_method: internal@## auth_method: internal@' /opt/ejabberd-15.06/conf/ejabberd.yml;
+            sudo sed -i 's@## auth_method: odbc@auth_method: odbc@' /opt/ejabberd-15.06/conf/ejabberd.yml;
+            sudo sed -i 's@## odbc_type: mysql@odbc_type: mysql@' /opt/ejabberd-15.06/conf/ejabberd.yml;
+            sudo sed -i "/odbc_type: mysql/{n;s/.*/odbc_server: \"$LOCAL_IP\"/}" /opt/ejabberd-15.06/conf/ejabberd.yml;
+            sudo sed -i "/odbc_server: \"$LOCAL_IP\"/{n;s/.*/odbc_database: \"ejabberd\"/}" /opt/ejabberd-15.06/conf/ejabberd.yml;
+            sudo sed -i '/odbc_database: \"ejabberd\"/{n;s/.*/odbc_username: \"ejabberd\"/}' /opt/ejabberd-15.06/conf/ejabberd.yml;
+            sudo sed -i '/odbc_username: \"ejabberd\"/{n;s/.*/odbc_password: \"ejabberd\"/}' /opt/ejabberd-15.06/conf/ejabberd.yml;
+
+            # Change hostname in ejabberdctl.cfg
+            sudo sed -i "s/#ERLANG_NODE=ejabberd@localhost/ERLANG_NODE=ejabberd@$LOCAL_IP/" /opt/ejabberd-15.06/conf/ejabberdctl.cfg;
+
+            # Change hostname in ejabberdctl
+            sudo sed -i "s/ERLANG_NODE=ejabberd@localhost/ERLANG_NODE=ejabberd@$LOCAL_IP/" /opt/ejabberd-15.06/bin/ejabberdctl;
+            echo "Finished configuration";
+
+            # Change file owners
+            sudo chown ubuntu:ubuntu /home/ubuntu/.erlang.cookie
+            sudo chown -R ubuntu:ubuntu /opt/ejabberd-15.06
+
+            echo "Attempting to run the chat server...";
+
+            sudo /opt/ejabberd-15.06/bin/ejabberdctl start;
+            sleep 5;
+            sudo /opt/ejabberd-15.06/bin/ejabberdctl status;
+
+            echo "Chat server running";
+            echo "Check chat server status using ejabberdctl status";
+
+            echo "Creating a copy of the cookie that can be copied by the slaves...";
+            sudo chmod 777 /home/ubuntu/.erlang.cookie;
+            cp /home/ubuntu/.erlang.cookie /home/ubuntu/.erlang.cookie.copy;
+            sudo chmod 700 /home/ubuntu/.erlang.cookie;
+
+            sleep 5;
+
+            # create admin user
+            sudo /opt/ejabberd-15.06/bin/ejabberdctl register admin $DOMAIN admin;
+
+            # echo "Admin Web UI available at http://$DOMAIN:5280/admin/";
+
+outputs:
+  instance_name:
+    description: Name of the instance
+    value: { get_attr: [chat_server, name] }

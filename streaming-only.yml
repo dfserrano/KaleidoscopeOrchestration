@@ -1,0 +1,101 @@
+heat_template_version: 2014-10-16
+
+description: Template to deploy a single streaming (EasyDSS) server
+
+parameters:
+  image:
+    type: string
+    label: Image name or ID
+    description: Image to be used for compute instance
+    default: Ubuntu-14-04-64
+  flavor:
+    type: string
+    label: Flavor
+    description: Type of instance (flavor) to be used
+    default: m1.small
+    constraints:
+      - allowed_values: [m1.tiny, m1.small, m1.medium, m1.large, m1.xlarge]
+        description: instance_type must be a valid instance type
+  key:
+    type: string
+    label: Key name
+    description: Name of key-pair to be used for compute instance
+    default: serranos
+
+resources:
+  StreamingSecGroup:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: streaming_server_sec
+      description: Security group that allows Ping, SSH, and RTSP
+      rules:
+      - protocol: icmp
+      - protocol: tcp
+        port_range_min: 22
+        port_range_max: 22
+      - protocol: tcp
+        port_range_min: 554
+        port_range_max: 554
+      - protocol: tcp
+        port_range_min: 7070
+        port_range_max: 7070
+      - protocol: tcp
+        port_range_min: 8000
+        port_range_max: 8000
+      - protocol: tcp
+        port_range_min: 8001
+        port_range_max: 8001
+      - protocol: tcp
+        port_range_min: 6970
+        port_range_max: 65535
+
+  StreamingServer:
+    type: OS::Nova::Server
+    properties:
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key }
+      security_groups:
+        - {get_resource: StreamingSecGroup}
+      user_data: |
+        #!/bin/sh -ex
+        echo "Update packages lists...";
+        sudo apt-get update;
+
+        echo "Installing Git and building packages...";
+        sudo apt-get install -y build-essential git;
+
+        echo "Getting EasyDarwin Streaming Server files...";
+        cd /opt;
+        sudo git clone https://github.com/EasyDarwin/EasyDarwin.git;
+        cd /opt/EasyDarwin;
+        sudo git checkout a245348;
+        echo "EasyDarwin Streaming Server downloaded";
+
+        echo "Building EasyDarwin Streaming Server...";
+        cd /opt/EasyDarwin/EasyDarwin;
+        sudo chmod +x Buildit;
+        sudo ./Buildit;
+        echo "Building EasyDarwin Streaming Server... completed";
+
+        echo "Making folder for on-demand videos...";
+        sudo mkdir /opt/EasyDarwin/EasyDarwin/Movies;
+
+        # Downloading demo video
+        cd /opt/EasyDarwin/EasyDarwin/Movies;
+        sudo wget https://raw.githubusercontent.com/dfserrano/KaleidoscopeOrchestration/master/streaming/Demo.mp4;
+        echo "On-demand video folder created";
+
+        echo "Attempting to run the streaming server...";
+        cd /opt/EasyDarwin/EasyDarwin;
+        sudo ./EasyDarwin -c ./WinNTSupport/easydarwin.xml &
+        echo "Streaming server running and ready to stream";
+      user_data_format: RAW
+
+outputs:
+  instance_name:
+    description: Name of the instance
+    value: { get_attr: [StreamingServer, name] }
+  instance_ip:
+    description: IP address of the instance
+    value: { get_attr: [StreamingServer, first_address] }
