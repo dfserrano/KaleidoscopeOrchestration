@@ -1,0 +1,72 @@
+heat_template_version: 2014-10-16
+
+description: Template to deploy a single chat (ejabberd) server
+
+parameters:
+  image:
+    type: string
+    label: Image name or ID
+    description: Image to be used for compute instance
+    default: Ubuntu-14-04-64
+  flavor:
+    type: string
+    label: Flavor
+    description: Type of instance (flavor) to be used
+    default: m1.tiny
+    constraints:
+      - allowed_values: [m1.tiny, m1.small, m1.medium, m1.large, m1.xlarge]
+        description: instance_type must be a valid instance type
+  key:
+    type: string
+    label: Key name
+    description: Name of key-pair to be used for compute instance
+    default: serranos
+  private_net:
+    type: string
+    default: 01415d99-47d9-4546-a700-d5a4ffe1e5f1
+    description: Id of the private network for the compute server
+  private_subnet:
+    type: string
+    default: 3a6b6367-75de-49f4-9b07-5152c02a4956
+    description: Id of the private sub network for the compute server
+  public_net:
+    type: string
+    default: 911c6954-a343-4bb9-bef6-1c9e20798a9d
+    description: Id of the public network for the compute server
+
+resources:
+
+  public_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_param: private_net }
+      fixed_ips:
+      - subnet_id: { get_param: private_subnet }
+      security_groups:
+      - serranos
+
+
+  floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network_id: { get_param: public_net }
+      port_id: { get_resource: public_port }
+
+  test_server:
+    type: OS::Nova::Server
+    properties:
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key }
+      networks:
+        - port: { get_resource: public_port }
+      user_data: |
+        #!/bin/sh -ex
+        PUBLIC_IP=$(curl -s checkip.dyndns.org | sed -e 's/.*Current IP Address: //' -e 's/<.*$//')
+        echo "MY PUBLIC IP IS $PUBLIC_IP";
+      user_data_format: RAW
+
+outputs:
+  instance_name:
+    description: Name of the instance
+    value: { get_attr: [test_server, name] }

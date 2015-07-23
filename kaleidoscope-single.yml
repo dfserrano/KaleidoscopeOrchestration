@@ -1,6 +1,6 @@
 heat_template_version: 2014-10-16
 
-description: Template to deploy a single chat (ejabberd) server
+description: Template to deploy a streaming and chat in a single server
 
 parameters:
   image:
@@ -24,7 +24,7 @@ parameters:
   db_root_password:
     type: string
     label: Root password for MySQL
-    description: Root password for MySQL
+    description: Root password for MySQL.  Used for the chat server (ejabberd).
     default: admin
     hidden: true
     constraints:
@@ -63,7 +63,33 @@ resources:
         port_range_min: 5280
         port_range_max: 5280
 
-  chat_server:
+  streaming_sec_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: streaming_server_sec
+      description: Security group that allows Ping, SSH, and RTSP
+      rules:
+      - protocol: icmp
+      - protocol: tcp
+        port_range_min: 22
+        port_range_max: 22
+      - protocol: tcp
+        port_range_min: 554
+        port_range_max: 554
+      - protocol: tcp
+        port_range_min: 7070
+        port_range_max: 7070
+      - protocol: tcp
+        port_range_min: 8000
+        port_range_max: 8000
+      - protocol: tcp
+        port_range_min: 8001
+        port_range_max: 8001
+      - protocol: tcp
+        port_range_min: 6970
+        port_range_max: 65535
+
+  kaleidoscope_server:
     type: OS::Nova::Server
     properties:
       image: { get_param: image }
@@ -71,6 +97,7 @@ resources:
       key_name: { get_param: key }
       security_groups:
         - {get_resource: chat_sec_group}
+        - {get_resource: streaming_sec_group}
       user_data_format: RAW
       user_data:
         str_replace:
@@ -85,8 +112,53 @@ resources:
             echo "Update packages lists...";
             sudo apt-get update;
 
+            echo "== INSTALLING STREAMING SERVER ==";
+            echo "Installing Git and building packages...";
+            sudo apt-get install -y build-essential git logrotate;
+
+            echo "Configuring logrotate...";
+            sudo tee -a /etc/logrotate.conf <<EOF
+            /home/ubuntu/easydss-logs/stats {
+                daily
+                copytruncate
+                rotate 3
+                compress
+                delaycompress
+                missingok
+            }
+            EOF
+            echo "Logrotate configured daily, rotate 3, with compression";
+
+            echo "Getting EasyDarwin Streaming Server files...";
+            cd /opt;
+            sudo git clone https://github.com/EasyDarwin/EasyDarwin.git;
+            cd /opt/EasyDarwin;
+            sudo git checkout a245348;
+            echo "EasyDarwin Streaming Server downloaded";
+
+            echo "Building EasyDarwin Streaming Server...";
+            cd /opt/EasyDarwin/EasyDarwin;
+            sudo chmod +x Buildit;
+            sudo ./Buildit;
+            echo "Building EasyDarwin Streaming Server... completed";
+
+            echo "Making folder for on-demand videos...";
+            sudo mkdir /opt/EasyDarwin/EasyDarwin/Movies;
+
+            # Downloading demo video
+            cd /opt/EasyDarwin/EasyDarwin/Movies;
+            sudo wget https://raw.githubusercontent.com/dfserrano/KaleidoscopeOrchestration/master/streaming/Demo.mp4;
+            echo "On-demand video folder created";
+
+            echo "Attempting to run the streaming server...";
+            sudo -u ubuntu mkdir /home/ubuntu/easydss-logs;
+            sudo chmod 777 /home/ubuntu/easydss-logs;
+            cd /opt/EasyDarwin/EasyDarwin;
+            sudo ./EasyDarwin -c ./WinNTSupport/easydarwin.xml -D >> /home/ubuntu/easydss-logs/stats &
+            echo "Streaming server running and ready to stream";
+
+            echo "== INSTALLING CHAT SERVER ==";
             echo "Installing MySQL for XMPP server...";
-            #export DEBIAN_FRONTEND=noninteractive;
             sudo DEBIAN_FRONTEND=noninteractive apt-get -y install mysql-server-5.6
 
             # configure MySQL root password
@@ -166,10 +238,13 @@ resources:
 
             # create admin user
             sudo /opt/ejabberd-15.06/bin/ejabberdctl register admin $DOMAIN admin;
+            sudo /opt/ejabberd-15.06/bin/ejabberdctl register test1 $DOMAIN test1;
+            sudo /opt/ejabberd-15.06/bin/ejabberdctl register test2 $DOMAIN test2;
 
             # echo "Admin Web UI available at http://$DOMAIN:5280/admin/";
+            # Test send with echo "hello from test1!" | sendxmpp -s hello test2@142.150.208.206
 
 outputs:
   instance_name:
     description: Name of the instance
-    value: { get_attr: [chat_server, name] }
+    value: { get_attr: [kaleidoscope_server, name] }
