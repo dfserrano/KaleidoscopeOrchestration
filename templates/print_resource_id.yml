@@ -1,0 +1,55 @@
+heat_template_version: 2014-10-16
+
+description: Template to deploy a server that print its own resource id
+
+parameters:
+  image:
+    type: string
+    label: Image name or ID
+    description: Image to be used for compute instance
+    default: Ubuntu-14-04-64
+  flavor:
+    type: string
+    label: Flavor
+    description: Type of instance (flavor) to be used
+    default: m1.tiny
+    constraints:
+      - allowed_values: [m1.tiny, m1.small, m1.medium, m1.large, m1.xlarge]
+        description: instance_type must be a valid instance type
+  key:
+    type: string
+    label: Key name
+    description: Name of key-pair to be used for compute instance
+    default: serranos
+
+resources:
+
+  test_server:
+    type: OS::Nova::Server
+    properties:
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key }
+      user_data: |
+        #!/bin/sh -ex
+        sudo apt-get update;
+        sudo apt-get install -y build-essential python-dev python-pip;
+
+        sudo pip install python-novaclient
+        # sudo pip install python-ceilometerclient
+
+        export OS_TENANT_NAME=ualberta;
+        export OS_USERNAME=serranos;
+        export OS_AUTH_URL=http://iam.savitestbed.ca:5000/v2.0;
+        export OS_PASSWORD=Giba007G;
+        export OS_REGION_NAME=CORE;
+
+        export LOCAL_IP=$(ifconfig eth0 | grep 'inet addr' | cut -d: -f2 | awk '{print $1}');
+        export LOCAL_ID=$(nova list | grep "$LOCAL_IP[ \|,]" | awk '{print $2}');
+        echo "THE RESOURCE ID IS $LOCAL_ID";
+      user_data_format: RAW
+
+outputs:
+  instance_name:
+    description: Name of the instance
+    value: { get_attr: [test_server, name] }

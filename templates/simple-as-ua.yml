@@ -1,0 +1,156 @@
+heat_template_version: 2014-10-16
+
+description: >
+  This is a simple template that illustrates the basic features
+  of OS::Heat::AutoScalingGroup when the scaled resource is an
+  OS::Nova::Server.  Additionally, install useragent and tried
+  to autoscale based on custom metrics. DOES NOT WORK!
+parameters:
+  key_name:
+    type: string
+    description: Name of an existing key pair to use for the instances
+    default: serranos
+  flavor:
+    type: string
+    description: Flavor for the instances to be created
+    default: m1.medium
+  image:
+    type: string
+    default: Ubuntu-14-04-64
+    description: Name or ID of the image to use for the instances.
+
+resources:
+  mon-vm:
+    type: OS::Heat::AutoScalingGroup
+    properties:
+      resource:
+        type: OS::Nova::Server
+        properties:
+          key_name: { get_param: key_name }
+          image: { get_param: image }
+          flavor: { get_param: flavor }
+          security_groups:
+            - default
+          metadata: {"metering.stack": {get_param: "OS::stack_id"}}
+          user_data: |
+            #!/bin/sh -ex
+            sudo apt-get update;
+            sudo apt-get install -y build-essential python-dev python-pip python-oslo.config python-iso8601 git python-novaclient;
+            sudo pip install tornado;
+            sudo pip install msgpack-python;
+            cd /home/ubuntu;
+            git clone https://github.com/jyericlin/ceilometer-useragent.git;
+            cd /home/ubuntu/ceilometer-useragent/;
+
+            # Get resource id
+            export OS_TENANT_NAME=ualberta;
+            export OS_USERNAME=serranos;
+            export OS_AUTH_URL=http://iam.savitestbed.ca:5000/v2.0;
+            export OS_PASSWORD=Giba007G;
+            export OS_REGION_NAME=CORE;
+            export LOCAL_IP=$(ifconfig eth0 | grep 'inet addr' | cut -d: -f2 | awk '{print $1}');
+            export RESOURCE_ID=$(nova list | grep "$LOCAL_IP[ \|,]" | awk '{print $2}');
+
+            # Install useragent
+            export COLLECTOR_IP="10.10.60.10";
+            export SECRET="bcaaa4b7-c95b-4583-bb9a-71d5e442ba35";
+            export PROJECT_ID="1e70271ffe71433a91d9265c379177b7";
+            export USER_ID="04f07e82c62a46e38975c1b3a8cea107";
+            ./bin/install_useragent.sh $COLLECTOR_IP $SECRET $PROJECT_ID $USER_ID;
+
+            # Useragent configuration
+            echo "port=8888" | sudo tee -a /etc/ceilometer-useragent/ceilometer-useragent.conf;
+            sudo sed -i 's@600000@60000@' /home/ubuntu/ceilometer-useragent/ceilometeruseragent/service.py;
+
+            # Start useragent
+            cd /home/ubuntu/ceilometer-useragent/bin;
+            sudo ./start_useragent.sh;
+            sleep 20;
+
+            #Create test file
+            cat > /home/ubuntu/stats <<EOL
+            0          0          0          0          0             0          0          0          2          0          0     2015-07-21 17:52:40
+            0          0          0          0          0             0          0          0          2          0          0     2015-07-21 17:52:43
+            EOL
+
+            # Create script for custom rule
+            mkdir /home/ubuntu/rules;
+            cd /home/ubuntu/rules;
+            cat > rtpsessions.sh <<EOL
+            #!/bin/bash
+            FILENAME='/home/ubuntu/stats';
+            SECOND_TO_LAST=\$(tail -2 \$FILENAME | head -1);
+            SECOND_TO_LAST=\$(sed -e 's/^[[:space:]]*//' <<< \$SECOND_TO_LAST);
+            LAST=\$(tail -n1 \$FILENAME);
+            LAST=\$(sed -e 's/^[[:space:]]*//' <<< \$LAST);
+
+            if [[ \${LAST:0:3} = 'RTP' ]];
+            then echo \$SECOND_TO_LAST | awk '{print \$1}';
+            else echo \$LAST | awk '{print \$1}';
+            fi;
+            EOL
+            chmod +x rtpsessions.sh;
+
+            # Create custom rule
+            cd /home/ubuntu/ceilometer-useragent/bin;
+            ./add_rules.sh rtpsessions gauge U $RESOURCE_ID 'Shell Script' "/home/ubuntu/rules/rtpsessions.sh";
+      min_size: 1
+      max_size: 2
+  scale_up_policy:
+    type: OS::Heat::ScalingPolicy
+    properties:
+      adjustment_type: change_in_capacity
+      auto_scaling_group_id: {get_resource: mon-vm}
+      cooldown: 60
+      scaling_adjustment: 1
+  scale_down_policy:
+    type: OS::Heat::ScalingPolicy
+    properties:
+      adjustment_type: change_in_capacity
+      auto_scaling_group_id: {get_resource: mon-vm}
+      cooldown: 60
+      scaling_adjustment: -1
+  cpu_alarm_high:
+    type: OS::Ceilometer::Alarm
+    properties:
+      description: Scale-up if the average rtp sessions > 5 for 60 seconds
+      meter_name: rtpsessions
+      statistic: avg
+      period: 60
+      evaluation_periods: 1
+      threshold: 5
+      alarm_actions:
+        - {get_attr: [scale_up_policy, alarm_url]}
+      matching_metadata: {'metadata.user_metadata.stack': {get_param: "OS::stack_id"}}
+      comparison_operator: gt
+  cpu_alarm_low:
+    type: OS::Ceilometer::Alarm
+    properties:
+      description: Scale-down if the average rtp sessions < 2 for 60 seconds
+      meter_name: rtpsessions
+      statistic: avg
+      period: 60
+      evaluation_periods: 1
+      threshold: 2
+      alarm_actions:
+        - {get_attr: [scale_down_policy, alarm_url]}
+      matching_metadata: {'metadata.user_metadata.stack': {get_param: "OS::stack_id"}}
+      comparison_operator: lt
+
+outputs:
+  server_ips:
+    description: >
+      List of IP addresses of each VM.
+    value: {get_attr: ['mon-vm', 'outputs_list', 'first_address']}
+  scale_up_url:
+    description: >
+      This URL is the webhook to scale up the group.  You can invoke
+      the scale-up operation by doing an HTTP POST to this URL; no
+      body nor extra headers are needed.
+    value: {get_attr: [scale_up_policy, alarm_url]}
+  scale_dn_url:
+    description: >
+      This URL is the webhook to scale down the group.  You can invoke
+      the scale-down operation by doing an HTTP POST to this URL; no
+      body nor extra headers are needed.
+    value: {get_attr: [scale_down_policy, alarm_url]}
