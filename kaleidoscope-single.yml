@@ -34,12 +34,12 @@ parameters:
         description: db_root_password must contain only alphanumeric characters
   domain:
     type: string
-    label: Domain name for XMPP
-    description: Domain name for XMPP
+    label: IP address for domain name for XMPP
+    description: IP address for domain name for XMPP
     default: 142.150.208.206
     constraints:
-      - length: { min: 5, max: 50 }
-        description: domain must be between 1 and 41 characters
+      - length: { min: 7, max: 15 }
+        description: domain must be between 7 and 15 characters
 
 
 resources:
@@ -149,6 +149,9 @@ resources:
             cd /opt/EasyDarwin/EasyDarwin/Movies;
             sudo wget https://raw.githubusercontent.com/dfserrano/KaleidoscopeOrchestration/master/streaming/Demo.mp4;
             echo "On-demand video folder created";
+
+            # Assign public ip to eth0 interface
+            sudo ip addr add dev eth0 __domain__
 
             echo "Attempting to run the streaming server...";
             sudo -u ubuntu mkdir /home/ubuntu/easydss-logs;

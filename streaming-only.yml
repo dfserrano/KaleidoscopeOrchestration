@@ -21,6 +21,11 @@ parameters:
     label: Key name
     description: Name of key-pair to be used for compute instance
     default: serranos
+  public_ip:
+    type: string
+    label: Public IP
+    description: Public IP address for the server
+    default: 142.150.208.206
 
 resources:
   streaming_sec_group:
@@ -58,59 +63,61 @@ resources:
       security_groups:
         - {get_resource: streaming_sec_group}
       user_data_format: RAW
-      user_data: |
-        #!/bin/sh -ex
-        echo "Update packages lists...";
-        sudo apt-get update;
+      user_data:
+        str_replace:
+          params:
+            __public_ip__: { get_param: public_ip }
+          template: |
+            #!/bin/sh -ex
+            echo "Update packages lists...";
+            sudo apt-get update;
 
-        echo "Installing Git and building packages...";
-        sudo apt-get install -y build-essential git logrotate;
+            echo "Installing Git and building packages...";
+            sudo apt-get install -y build-essential git logrotate;
 
-        echo "Configuring logrotate...";
-        sudo tee -a /etc/logrotate.conf <<EOF
-        /home/ubuntu/easydss-logs/stats {
-            daily
-            copytruncate
-            rotate 3
-            compress
-            delaycompress
-            missingok
-        }
-        EOF
-        echo "Logrotate configured daily, rotate 3, with compression";
+            echo "Configuring logrotate...";
+            sudo tee -a /etc/logrotate.conf <<EOF
+            /home/ubuntu/easydss-logs/stats {
+                daily
+                copytruncate
+                rotate 3
+                compress
+                delaycompress
+                missingok
+            }
+            EOF
+            echo "Logrotate configured daily, rotate 3, with compression";
 
-        echo "Getting EasyDarwin Streaming Server files...";
-        cd /opt;
-        sudo git clone https://github.com/EasyDarwin/EasyDarwin.git;
-        cd /opt/EasyDarwin;
-        sudo git checkout a245348;
-        echo "EasyDarwin Streaming Server downloaded";
+            echo "Getting EasyDarwin Streaming Server files...";
+            cd /opt;
+            sudo git clone https://github.com/EasyDarwin/EasyDarwin.git;
+            cd /opt/EasyDarwin;
+            sudo git checkout a245348;
+            echo "EasyDarwin Streaming Server downloaded";
 
-        echo "Building EasyDarwin Streaming Server...";
-        cd /opt/EasyDarwin/EasyDarwin;
-        sudo chmod +x Buildit;
-        sudo ./Buildit;
-        echo "Building EasyDarwin Streaming Server... completed";
+            echo "Building EasyDarwin Streaming Server...";
+            cd /opt/EasyDarwin/EasyDarwin;
+            sudo chmod +x Buildit;
+            sudo ./Buildit;
+            echo "Building EasyDarwin Streaming Server... completed";
 
-        echo "Making folder for on-demand videos...";
-        sudo mkdir /opt/EasyDarwin/EasyDarwin/Movies;
+            echo "Making folder for on-demand videos...";
+            sudo mkdir /opt/EasyDarwin/EasyDarwin/Movies;
 
-        # Downloading demo video
-        cd /opt/EasyDarwin/EasyDarwin/Movies;
-        sudo wget https://raw.githubusercontent.com/dfserrano/KaleidoscopeOrchestration/master/streaming/Demo.mp4;
-        echo "On-demand video folder created";
+            # Downloading demo video
+            cd /opt/EasyDarwin/EasyDarwin/Movies;
+            sudo wget https://raw.githubusercontent.com/dfserrano/KaleidoscopeOrchestration/master/streaming/Demo.mp4;
+            echo "On-demand video folder created";
 
-        echo "Attempting to run the streaming server...";
-        sudo -u ubuntu mkdir /home/ubuntu/easydss-logs;
-        sudo chmod 777 /home/ubuntu/easydss-logs;
-        cd /opt/EasyDarwin/EasyDarwin;
-        sudo ./EasyDarwin -c ./WinNTSupport/easydarwin.xml -D >> /home/ubuntu/easydss-logs/stats &
-        echo "Streaming server running and ready to stream";
+            # Assign public ip to eth0 interface
+            sudo ip addr add dev eth0 __public_ip__
 
-        #vlc rtsp://142.150.208.206:554/Demo.mp4 --sout '#es{access=file,mux=ps,url_audio=audio-%c.%m,url_video=video-%c.%m}'
-        #** screen -d -m vlc --intf dummy rtsp://142.150.208.206:554/Demo.mp4 -vvv --file-logging --logfile=vlc-log.txt
-        #vlc --intf dummy rtsp://142.150.208.206:554/Demo.mp4 -vvv --file-logging --logfile=vlc-log.txt --sout=file/ps:go.mpg
-
+            echo "Attempting to run the streaming server...";
+            sudo -u ubuntu mkdir /home/ubuntu/easydss-logs;
+            sudo chmod 777 /home/ubuntu/easydss-logs;
+            cd /opt/EasyDarwin/EasyDarwin;
+            sudo ./EasyDarwin -c ./WinNTSupport/easydarwin.xml -D >> /home/ubuntu/easydss-logs/stats &
+            echo "Streaming server running and ready to stream";
 
 outputs:
   instance_name:
