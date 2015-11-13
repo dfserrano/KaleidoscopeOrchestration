@@ -16,3 +16,6 @@ sar -o cpu.log $1 $2 >/dev/null 2>&1 &
 # Network
 sar -n ALL -o network.log $1 $2 >/dev/null 2>&1 &
 # sar -n ALL -f network.log > network.txt
+
+# To read file
+# sar -f path/to/file

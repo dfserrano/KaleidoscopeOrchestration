@@ -18,3 +18,5 @@ for ((i=1; i<=$NUM_SESSIONS; i++)); do
 	VIDEO_NUMBER=$(( ( RANDOM % NUM_VIDEOS )  + 1 ))
 	echo "screen -d -m vlc --intf dummy rtsp://142.150.208.206:554/${VIDEO_NAME}${VIDEO_NUMBER}.mp4 -vvv --file-logging --logfile=vlc-log${CURDATE}_${i}.txt"
 done
+
+// screen -d -m vlc --intf dummy rtsp://162.246.156.33:554/${VIDEO_NAME}${VIDEO_NUMBER}.mp4 -vvv --file-logging --logfile=vlc-log${CURDATE}_${i}.txt
